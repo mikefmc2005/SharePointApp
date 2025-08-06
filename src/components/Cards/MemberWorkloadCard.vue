@@ -1,13 +1,7 @@
 <template>
-	<div style="min-height: 625px;">
-		<MemberWorkloadChart />
-	</div>
-
+  <MemberWorkloadChart />
 </template>
 
 <script setup>
-	import MemberWorkloadChart from '../Charts/MemberWorkload.vue'
-
-	defineExpose({})
-
+import MemberWorkloadChart from "../Charts/MemberWorkload.vue";
 </script>

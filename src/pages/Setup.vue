@@ -1,351 +1,240 @@
-<template>
-  <div class="setup-dashboard">
-      <div
-        v-for="(column, colIdx) in columns"
-        :key="colIdx"
-        class="dashboard-column"
-        ref="dashboardColumns"
-      >
-        <div class="dashboard-header">{{ column.title }}</div>
-        <ul v-if="column.title !== 'KEY'" class="dashboard-list">
-          <li
-            v-for="(item, i) in column.items"
-            :key="i"
-            class="dashboard-list-item"
-          >
-            <span>{{ item }}</span>
-            <div class="delete-area">
-              <template
-                v-if="
-                  confirmDelete &&
-                  confirmDelete.col === colIdx &&
-                  confirmDelete.idx === i
-                "
-              >
-                <span class="popconfirm">
-                  <span class="popconfirm-text">Are you sure?</span>
-                  <span class="popconfirm-btn-row">
-                    <button
-                      class="popconfirm-btn yes"
-                      @click="confirmDeleteItem(colIdx, i)"
-                    >
-                      Yes
-                    </button>
-                    <button class="popconfirm-btn no" @click="cancelDelete">
-                      No
-                    </button>
-                  </span>
-                </span>
-              </template>
-              <template v-else>
-                <button
-                  class="delete-btn"
-                  @click="showDeleteConfirm(colIdx, i)"
-                  title="Delete"
-                >
-                  ❌
-                </button>
-              </template>
-            </div>
-          </li>
-          <!-- Inline add for non-KEY cards -->
-          <li v-if="showAddInput[colIdx]" class="dashboard-list-item add-item">
-            <div class="add-input-container">
-              <input
-                v-model="newItems[colIdx]"
-                @keyup.enter="addItem(colIdx)"
-                class="inline-add-input"
-                type="text"
-                :placeholder="'Add new ' + column.title.slice(0, -1)"
-                autofocus
-              />
-              <div class="inline-buttons">
-                <button class="inline-confirm-btn" @click="addItem(colIdx)">
-                  Add
-                </button>
-                <button class="inline-cancel-btn" @click="cancelAdd(colIdx)">
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </li>
-        </ul>
-        <!-- Special two-column layout for KEY card -->
-        <div v-else class="dashboard-list key-list">
-          <div
-            v-for="(row, rowIdx) in keyRows"
-            :key="'row-' + rowIdx"
-            class="key-row"
-          >
-            <div class="key-col">
-              <div class="key-item">
-                <span>{{ row.left || "" }}</span>
-              </div>
-            </div>
-            <div class="key-col">
-              <div class="key-item">
-                <span>{{ row.right || "" }}</span>
-              </div>
-            </div>
-            <div class="delete-area">
-              <template
-                v-if="
-                  confirmDelete &&
-                  confirmDelete.col === colIdx &&
-                  confirmDelete.idx === rowIdx
-                "
-              >
-                <span class="popconfirm">
-                  <span class="popconfirm-text">Are you sure?</span>
-                  <span class="popconfirm-btn-row">
-                    <button
-                      class="popconfirm-btn yes"
-                      @click="confirmDeleteKeyRow(rowIdx)"
-                    >
-                      Yes
-                    </button>
-                    <button class="popconfirm-btn no" @click="cancelDelete">
-                      No
-                    </button>
-                  </span>
-                </span>
-              </template>
-              <template v-else>
-                <button
-                  class="delete-btn"
-                  @click="showDeleteKeyRowConfirm(colIdx, rowIdx)"
-                  title="Delete"
-                >
-                  ❌
-                </button>
-              </template>
-            </div>
-          </div>
-          <!-- Inline add for KEY card -->
-          <div v-if="showAddInput[colIdx]" class="dashboard-list-item add-item">
-            <div class="add-input-container">
-              <div class="key-col">
-                <input
-                  v-model="newKeyCol1"
-                  @keyup.enter="addKeyRow"
-                  class="inline-add-input"
-                  type="text"
-                  placeholder="Left column"
-                  autofocus
-                />
-              </div>
-              <div class="key-col">
-                <input
-                  v-model="newKeyCol2"
-                  @keyup.enter="addKeyRow"
-                  class="inline-add-input"
-                  type="text"
-                  placeholder="Right column"
-                />
-              </div>
-              <div class="inline-buttons">
-                <button class="inline-confirm-btn" @click="addKeyRow">Add</button>
-                <button class="inline-cancel-btn" @click="cancelAdd(colIdx)">
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <!-- Add button row -->
-        <div class="add-item-row">
-          <template v-if="!showAddInput[colIdx]">
-            <button class="show-add-btn" @click="showAdd(colIdx)">+ Add</button>
-          </template>
-        </div>
-      </div>
-  </div>
-</template>
-
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, onMounted, onBeforeUnmount, watch } from "vue";
+import { useProjectStore } from "../store";
+import { addItem } from "../actions/addItem";
+import { getItem } from "../actions/getItem";
+import { editItem } from "../actions/editItem";
+import { deleteItem } from "../actions/deleteItem";
+import LoadingSpinner from "../components/LoadingSpinner.vue";
 
-const columns = ref([
-  {
-    title: "Stages",
-    items: [
-      "Planning",
-      "BCAC_Phase_1",
-      "BCAC_Phase_2",
-      "Procurement",
-      "BCAC_Phase_3",
-      "Development",
-      "Deployment",
-      "BCAC_Phase_4",
-      "Sustainment",
-      "BCAC_Phase_5",
-      "Decommissioning",
-    ],
-  },
-  {
-    title: "PROJECTS MEMBERS",
-    items: [
-      "Norman Whitehead",
-      "Bob Dasika",
-      "Jaydeep Patel",
-      "Gale Wallace",
-      "Ricardo James",
-      "Shilpa Vadlamudi",
-      "Tommeka Johnson",
-    ],
-  },
-  {
-    title: "STATUS",
-    items: [
-      "ON TIME",
-      "COMPLETED",
-      "ON GOING",
-      "AT RISK",
-      "DELAYED",
-      "LATE",
-      "PENDING",
-      "NOT STARTED",
-    ],
-  },
-  {
-    title: "KEY",
-    items: [
-      "New Task",
-      "In Progress Task",
-      "Done",
-      "Deadline",
-      "Event",
-      "Meeting",
-      "Cancelled",
-      "Migrated",
-      "Finance",
-      "Human Resources",
-      "Operations",
-      "Logistics",
-      "IT",
-      "Strategy and Planning",
-      "Sales",
-      "Marketing",
-    ],
-  },
-  {
-    title: "MONTHS",
-    items: [
-      "JANUARY",
-      "FEBRUARY",
-      "MARCH",
-      "APRIL",
-      "MAY",
-      "JUNE",
-      "JULY",
-      "AUGUST",
-      "SEPTEMBER",
-      "OCTOBER",
-      "NOVEMBER",
-      "DECEMBER",
-    ],
-  },
-  {
-    title: "YEARS",
-    items: ["2025", "2026", "2027", "2028", "2029", "2030", "2031", "2032"],
-  },
-  {
-    title: "NOTES TYPE",
-    items: [
-      "From Client Meeting",
-      "From Team Meeting",
-      "Reminders",
-      "Minutes of the Meeting",
-      "Personal",
-      "Brain Dump",
-      "Ideas",
-    ],
-  },
-]);
+const projectStore = useProjectStore();
 
-const newItems = ref(Array(columns.value.length).fill(""));
-const showAddInput = ref(Array(columns.value.length).fill(false));
-const confirmDelete = ref(null); // { col: colIdx, idx: itemIdx }
+const current = ref({
+  columns: [],
+});
+const currentKeyRows = ref([]);
 
-// For KEY card add
+const newItems = ref({});
+const showAddInput = ref({});
+const confirmDelete = ref(null);
+
+const newProjectName = ref("");
 const newKeyCol1 = ref("");
 const newKeyCol2 = ref("");
+const newStatusColor = ref("#666666");
 
-function showAdd(colIdx) {
-  showAddInput.value = showAddInput.value.map((v, i) => i === colIdx);
-  newItems.value[colIdx] = "";
-  if (columns.value[colIdx].title === "KEY") {
+watch(
+  () => [projectStore.currentProject],
+  ([project]) => {
+    if (project) {
+      current.value = {
+        ProjectTitle: project.Title,
+        columns: Object.keys(project)
+          .filter((item) => ["phases", "status", "members", "key_IDs", "years", "months", "note_types"].includes(item))
+          .map((item) => {
+            return {
+              title: item == "key_IDs" ? "KEY" : item == "note_types" ? "NOTE TYPES" : item,
+              items: project[item],
+            };
+          }),
+      };
+    }
+  },
+  { immediate: true, deep: true }
+);
+
+watch(
+  () => [current.value.columns],
+  ([source]) => {
+    if (source) {
+      source.map((item) => {
+        newItems[item.title] = "";
+        showAddInput[item.title] = false;
+      });
+
+      const keyCol = source.find((c) => c.title === "KEY");
+      if (!keyCol) return [];
+      const fields = ["ID", "key", "value"];
+
+      getItem("Keys", fields).then((res) => {
+        currentKeyRows.value = res.filter((item) => (keyCol.items ? keyCol.items : "").indexOf(String(item.ID)) != -1);
+      });
+    }
+  },
+  { immediate: true, deep: true }
+);
+
+function showAdd(colTitle) {
+  showAddInput.value[colTitle] = true;
+  newItems.value[colTitle] = "";
+  if (colTitle === "KEY") {
     newKeyCol1.value = "";
     newKeyCol2.value = "";
   }
-}
-
-function cancelAdd(colIdx) {
-  showAddInput.value[colIdx] = false;
-  newItems.value[colIdx] = "";
-  if (columns.value[colIdx].title === "KEY") {
-    newKeyCol1.value = "";
-    newKeyCol2.value = "";
+  if (colTitle === "status") {
+    newStatusColor.value = "#666666";
   }
 }
 
-function addItem(colIdx) {
-  const value = newItems.value[colIdx]?.trim();
+function cancelAdd(colTitle) {
+  showAddInput.value[colTitle] = false;
+  newItems.value[colTitle] = "";
+  if (colTitle === "KEY") {
+    newKeyCol1.value = "";
+    newKeyCol2.value = "";
+  }
+  if (colTitle === "status") {
+    newStatusColor.value = "#666666";
+  }
+}
+
+function addElement(colTitle) {
+  const value = newItems.value[colTitle]?.trim();
   if (value) {
-    columns.value[colIdx].items.push(value);
-    newItems.value[colIdx] = "";
-    showAddInput.value[colIdx] = false;
+    const keyName = colTitle == "KEY" ? "key_IDs" : colTitle == "NOTE TYPES" ? "note_types" : colTitle;
+
+    let finalValue = value;
+
+    let currentValue = projectStore.currentProject[keyName] ? projectStore.currentProject[keyName] : [];
+
+    if (colTitle === "status") {
+      finalValue = { name: value, color: newStatusColor.value };
+    }
+
+    currentValue.push(finalValue);
+
+    let valueName = currentValue.join(",");
+
+    if (colTitle === "status") {
+      valueName = currentValue
+        .map((item) => {
+          return item.name + item.color;
+        })
+        .join(",");
+    }
+
+    projectStore.setLoading(true);
+    editItem("Projects", projectStore.currentProject.ID, { [keyName]: valueName })
+      .then((res) => {
+        projectStore.editProject({
+          ID: projectStore.currentProject.ID,
+          [keyName]: currentValue,
+        });
+        newItems.value[colTitle] = "";
+        showAddInput.value[colTitle] = false;
+        if (colTitle === "status") {
+          newStatusColor.value = "#666666";
+        }
+      })
+      .finally(() => {
+        projectStore.setLoading(false);
+      });
   }
 }
 
-// For KEY card: add as one row
 function addKeyRow() {
-  const keyCol = columns.value.find((c) => c.title === "KEY");
+  const keyCol = current.value.columns.find((c) => c.title === "KEY");
   if (!keyCol) return;
   const val1 = newKeyCol1.value.trim();
   const val2 = newKeyCol2.value.trim();
-  if (val1) keyCol.items.push(val1);
-  if (val2) keyCol.items.push(val2);
-  newKeyCol1.value = "";
-  newKeyCol2.value = "";
-  const keyIdx = columns.value.findIndex((c) => c.title === "KEY");
-  showAddInput.value[keyIdx] = false;
+  projectStore.setLoading(true);
+  addItem("Keys", { key: val1, value: val2 })
+    .then((res) => {
+      const currentValue = projectStore.currentProject["key_IDs"];
+      const parts = typeof currentValue === "string" ? currentValue.split(",") : [];
+      parts.push(res.ID);
+      const valueName = parts.join(",");
+
+      editItem("Projects", projectStore.currentProject.ID, { key_IDs: valueName })
+        .then(() => {
+          projectStore.editProject({
+            ID: projectStore.currentProject.ID,
+            key_IDs: valueName,
+          });
+
+          currentKeyRows.value.push({
+            ID: res.ID,
+            key: val1,
+            value: val2,
+          });
+
+          newKeyCol1.value = "";
+          newKeyCol2.value = "";
+          showAddInput.value["KEY"] = false;
+        })
+        .finally(() => {
+          projectStore.setLoading(false);
+        });
+    })
+    .catch(() => {
+      projectStore.setLoading(false);
+    });
 }
 
-function showDeleteConfirm(colIdx, itemIdx) {
-  confirmDelete.value = { col: colIdx, idx: itemIdx };
+function showDeleteConfirm(colTitle, itemIdx) {
+  confirmDelete.value = { col: colTitle, idx: itemIdx };
 }
 
-function cancelDelete() {
-  confirmDelete.value = null;
-}
+function confirmDeleteItem(colTitle, itemIdx) {
+  const keyName = colTitle == "KEY" ? "key_IDs" : colTitle == "NOTE TYPES" ? "note_types" : colTitle;
+  const currentValue = projectStore.currentProject[keyName];
 
-function confirmDeleteItem(colIdx, itemIdx) {
-  columns.value[colIdx].items.splice(itemIdx, 1);
-  confirmDelete.value = null;
-}
+  currentValue.splice(itemIdx, 1);
+  let valueName = currentValue.join(",");
 
-// For KEY card: delete entire row
-function showDeleteKeyRowConfirm(colIdx, rowIdx) {
-  confirmDelete.value = { col: colIdx, idx: rowIdx };
+  if (colTitle === "status") {
+    valueName = currentValue
+      .map((item) => {
+        return item.name + item.color;
+      })
+      .join(",");
+  }
+
+  projectStore.setLoading(true);
+
+  editItem("Projects", projectStore.currentProject.ID, { [keyName]: valueName })
+    .then((res) => {
+      projectStore.editProject({
+        ID: projectStore.currentProject.ID,
+        [keyName]: currentValue,
+      });
+      confirmDelete.value = null;
+    })
+    .finally(() => {
+      projectStore.setLoading(false);
+    });
 }
 
 function confirmDeleteKeyRow(rowIdx) {
-  const keyColObj = columns.value.find((c) => c.title === "KEY");
+  const keyColObj = current.value.columns.find((c) => c.title === "KEY");
   if (!keyColObj) return;
-  const half = Math.ceil(keyColObj.items.length / 2);
-  // Remove both items from the row
-  if (rowIdx < half) {
-    keyColObj.items.splice(rowIdx, 1);
-    if (rowIdx < keyColObj.items.length) {
-      keyColObj.items.splice(rowIdx, 1);
-    }
-  } else {
-    const rightIdx = rowIdx - half;
-    if (rightIdx < keyColObj.items.length - half) {
-      keyColObj.items.splice(half + rightIdx, 1);
-    }
-  }
+
+  projectStore.setLoading(true);
+  deleteItem("Keys", keyColObj.items.split(",")[rowIdx])
+    .then((res) => {
+      const currentValue = projectStore.currentProject["key_IDs"];
+      const parts = typeof currentValue == "string" ? currentValue.split(",") : [];
+      parts.splice(rowIdx, 1);
+      const valueName = parts.join(",");
+
+      editItem("Projects", projectStore.currentProject.ID, { key_IDs: valueName })
+        .then((res) => {
+          projectStore.editProject({
+            ID: projectStore.currentProject.ID,
+            key_IDs: valueName,
+          });
+          confirmDelete.value = null;
+        })
+        .finally(() => {
+          projectStore.setLoading(false);
+        });
+    })
+    .catch(() => {
+      projectStore.setLoading(false);
+    });
+}
+
+function cancelDelete() {
   confirmDelete.value = null;
 }
 
@@ -358,6 +247,7 @@ function handleClickOutside(event) {
     confirmDelete.value = null;
   }
 }
+
 onMounted(() => {
   document.addEventListener("mousedown", handleClickOutside);
 });
@@ -365,50 +255,179 @@ onBeforeUnmount(() => {
   document.removeEventListener("mousedown", handleClickOutside);
 });
 
-// For KEY card: create rows from items
-const keyRows = computed(() => {
-  const keyCol = columns.value.find((c) => c.title === "KEY");
-  if (!keyCol) return [];
-  const half = Math.ceil(keyCol.items.length / 2);
-  const leftItems = keyCol.items.slice(0, half);
-  const rightItems = keyCol.items.slice(half);
-  const maxRows = Math.max(leftItems.length, rightItems.length);
-  const rows = [];
-  for (let i = 0; i < maxRows; i++) {
-    rows.push({
-      left: leftItems[i] || "",
-      right: rightItems[i] || "",
+function updateStatusColor(itemIdx, newColor) {
+  const currentValue = projectStore.currentProject["status"];
+
+  console.log(currentValue);
+
+  const newItemValue = { name: currentValue[itemIdx].name, color: newColor };
+  currentValue[itemIdx] = newItemValue;
+  const valueName = currentValue
+    .map((item) => {
+      return item.name + item.color;
+    })
+    .join(",");
+
+  projectStore.setLoading(true);
+  editItem("Projects", projectStore.currentProject.ID, { status: valueName })
+    .then((res) => {
+      projectStore.editProject({
+        ID: projectStore.currentProject.ID,
+        status: currentValue,
+      });
+    })
+    .finally(() => {
+      projectStore.setLoading(false);
     });
-  }
-  return rows;
-});
+}
 </script>
+
+<template>
+  <LoadingSpinner :showing="projectStore.loading" text="Loading...">
+    <div class="setup-dashboard">
+      <div v-for="(column, colIdx) in current.columns" :key="colIdx" class="dashboard-column" ref="dashboardColumns">
+        <div class="dashboard-header">{{ column.title }}</div>
+        <ul v-if="column.title !== 'KEY'" class="dashboard-list">
+          <li v-for="(item, i) in column.items" :key="i" class="dashboard-list-item">
+            <span v-if="column.title !== 'status'">{{ item }}</span>
+            <div v-else class="status-item-container">
+              <input
+                :value="item.color"
+                @change="updateStatusColor(i, $event.target.value)"
+                class="status-color-picker"
+                type="color"
+                title="Change color"
+              />
+              <q-badge :style="{ backgroundColor: item.color }" class="status-badge">
+                {{ item.name }}
+              </q-badge>
+            </div>
+            <div class="delete-area">
+              <template v-if="confirmDelete && confirmDelete.col === column.title && confirmDelete.idx === i">
+                <span class="popconfirm">
+                  <span class="popconfirm-text">Are you sure?</span>
+                  <span class="popconfirm-btn-row">
+                    <button class="popconfirm-btn yes" @click="confirmDeleteItem(column.title, i)">Yes</button>
+                    <button class="popconfirm-btn no" @click="cancelDelete">No</button>
+                  </span>
+                </span>
+              </template>
+              <template v-else>
+                <button class="delete-btn" @click="showDeleteConfirm(column.title, i)" title="Delete">❌</button>
+              </template>
+            </div>
+          </li>
+          <li v-if="showAddInput[column.title]" class="dashboard-list-item add-item">
+            <div class="add-input-container">
+              <div v-if="column.title === 'status'" class="status-input-row">
+                <input
+                  v-model="newItems[column.title]"
+                  @keyup.enter="addElement(column.title)"
+                  class="inline-add-input status-text-input"
+                  type="text"
+                  placeholder="Status name"
+                  autofocus
+                />
+                <input v-model="newStatusColor" class="inline-color-input" type="color" title="Choose color" />
+              </div>
+              <input
+                v-else
+                v-model="newItems[column.title]"
+                @keyup.enter="addElement(column.title)"
+                class="inline-add-input"
+                type="text"
+                :placeholder="'Add new ' + column.title.slice(0, -1)"
+                autofocus
+              />
+              <div class="inline-buttons">
+                <button class="inline-confirm-btn" @click="addElement(column.title)">Add</button>
+                <button class="inline-cancel-btn" @click="cancelAdd(column.title)">Cancel</button>
+              </div>
+            </div>
+          </li>
+        </ul>
+        <div v-else class="dashboard-list key-list">
+          <div v-for="(row, rowIdx) in currentKeyRows" :key="'row-' + rowIdx" class="key-row">
+            <div class="key-col">
+              <div class="key-item">
+                <span>{{ row.key || "" }}</span>
+              </div>
+            </div>
+            <div class="key-col">
+              <div class="key-item">
+                <span>{{ row.value || "" }}</span>
+              </div>
+            </div>
+            <div class="delete-area">
+              <template v-if="confirmDelete && confirmDelete.col === column.title && confirmDelete.idx === rowIdx">
+                <span class="popconfirm">
+                  <span class="popconfirm-text">Are you sure?</span>
+                  <span class="popconfirm-btn-row">
+                    <button class="popconfirm-btn yes" @click="confirmDeleteKeyRow(rowIdx)">Yes</button>
+                    <button class="popconfirm-btn no" @click="cancelDelete">No</button>
+                  </span>
+                </span>
+              </template>
+              <template v-else>
+                <button class="delete-btn" @click="showDeleteConfirm(column.title, rowIdx)" title="Delete">❌</button>
+              </template>
+            </div>
+          </div>
+          <div v-if="showAddInput[column.title]" class="dashboard-list-item">
+            <div class="add-input-container">
+              <div class="key-col">
+                <input
+                  v-model="newKeyCol1"
+                  @keyup.enter="addKeyRow"
+                  class="inline-add-input"
+                  type="text"
+                  placeholder="Input key"
+                  autofocus
+                />
+              </div>
+              <div class="key-col">
+                <input
+                  v-model="newKeyCol2"
+                  @keyup.enter="addKeyRow"
+                  class="inline-add-input"
+                  type="text"
+                  placeholder="Input value"
+                />
+              </div>
+              <div class="inline-buttons">
+                <button class="inline-confirm-btn" @click="addKeyRow">Add</button>
+                <button class="inline-cancel-btn" @click="cancelAdd(column.title)">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="add-item-row">
+          <template v-if="!showAddInput[column.title]">
+            <button class="show-add-btn" @click="showAdd(column.title)">+ Add</button>
+          </template>
+        </div>
+      </div>
+    </div>
+  </LoadingSpinner>
+</template>
 
 <style lang="scss" scoped>
 .setup-dashboard {
   display: flex;
-  flex-direction: row;
-  justify-content: center;
-  align-items: stretch;
-  gap: 2rem;
-  padding: 2rem;
-  background: #ffffff;
-  min-height: 80vh;
-  border-radius: 15px;
+  height: calc(100vh - 100px);
+  overflow: auto;
+  padding: 0 3rem 2rem;
+  text-wrap-mode: nowrap;
 }
 .dashboard-column {
   background: #fff;
-  border-radius: 1.2rem;
-  box-shadow: 0 2px 10px 0 rgba(80, 112, 255, 0.1),
-    0 1.5px 4px 0 rgba(0, 0, 0, 0.04);
-  min-width: 170px;
-  max-width: 280px;
-  padding: 1.5rem 0.5rem 1rem 0.5rem;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  border-radius: 0 0 1.2rem 1.2rem;
+  box-shadow: 0 2px 10px 0 rgba(80, 112, 255, 0.1), 0 1.5px 4px 0 rgba(0, 0, 0, 0.04);
+  padding: 1.5rem 1rem;
   border: 1.5px solid #e0e7ff;
-  min-height: 400px; /* reduced height for a less tall board */
+  overflow-y: auto;
+  min-width: 190px;
+  margin: 0 1rem;
 }
 .dashboard-header {
   font-size: 1.15rem;
@@ -591,22 +610,15 @@ const keyRows = computed(() => {
 .key-list {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
   margin-bottom: 0.5rem;
 }
 .key-row {
   display: flex;
   border-bottom: 1px dashed #e5e7eb;
-  flex-direction: row;
-  gap: 1.5rem;
-  justify-content: center;
-  align-items: center;
-  position: relative;
 }
 .key-col {
-  display: flex;
-  flex-direction: column;
-  min-width: 90px;
+  flex: 1;
+  overflow: hidden;
 }
 .key-item {
   font-size: 0.8rem;
@@ -614,18 +626,94 @@ const keyRows = computed(() => {
   padding: 0.25rem 0.2rem;
   border-bottom: 1px dashed #e5e7eb;
   text-align: left;
-  white-space: nowrap;
-  min-height: 1.5rem;
-  display: flex;
   align-items: center;
 }
 .key-item:last-child {
   border-bottom: none;
+}
+.status-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.5rem;
+  display: inline-block;
+  min-width: 60px;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 .add-key-row {
   border: 1px dashed #c7d2fe;
   border-radius: 0.5rem;
   padding: 0.5rem;
   background: #f8fafc;
+}
+.status-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.status-text-input {
+  flex: 1;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid #c7d2fe;
+  border-radius: 0.5rem;
+  font-size: 0.8rem;
+  outline: none;
+  transition: border 0.2s;
+  box-sizing: border-box;
+}
+.status-text-input:focus {
+  border-color: #6366f1;
+}
+.inline-color-input {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid #c7d2fe;
+  padding: 0;
+  cursor: pointer;
+  transition: border 0.2s;
+}
+.inline-color-input:focus {
+  border-color: #6366f1;
+}
+.status-item-container {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.status-color-picker {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid #c7d2fe;
+  padding: 0;
+  cursor: pointer;
+  transition: border 0.2s;
+  background: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+.status-color-picker::-webkit-color-swatch-wrapper {
+  padding: 0;
+  border-radius: 50%;
+  overflow: hidden;
+}
+.status-color-picker::-webkit-color-swatch {
+  border: none;
+  border-radius: 50%;
+  width: 100%;
+  height: 100%;
+}
+.status-color-picker::-moz-color-swatch {
+  border: none;
+  border-radius: 50%;
+  width: 100%;
+  height: 100%;
+}
+.status-color-picker:focus {
+  border-color: #6366f1;
+  outline: none;
 }
 </style>

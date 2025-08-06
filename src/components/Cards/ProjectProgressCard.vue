@@ -1,13 +1,9 @@
 <template>
-	<div>
-		<ProjectProgressChart />
-	</div>
-
+  <ProjectProgressChart />
 </template>
 
 <script setup>
-	import ProjectProgressChart from '../Charts/ProjectProgress.vue'
+import ProjectProgressChart from "../Charts/ProjectProgress.vue";
 
-	defineExpose({})
-
+defineExpose({});
 </script>

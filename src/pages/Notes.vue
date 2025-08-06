@@ -1,170 +1,72 @@
-<template>
-  <div class="notes-layout">
-    <!-- Sidebar: Note Types -->
-    <aside class="notes-sidebar">
-      <div class="sidebar-title">Note Types</div>
-      <input
-        v-model="typeSearch"
-        class="note-type-search"
-        type="text"
-        placeholder="Search types..."
-        style="margin: 0 0 12px 0; padding: 8px 12px; border-radius: 8px; border: 1.5px solid #cbd5e1; font-size: 1.05rem; background: #f8fafc; width: 90%; align-self: center;"
-      />
-      <ul class="note-types-list">
-        <li
-          :class="{ selected: selectedType === 'All' }"
-          @click="selectType('All')"
-        >
-          All
-        </li>
-        <li
-          v-for="type in filteredNoteTypes"
-          :key="type"
-          :class="{ selected: selectedType === type }"
-          @click="selectType(type)"
-        >
-          {{ type }}
-        </li>
-      </ul>
-    </aside>
-
-    <!-- Main Content -->
-    <div class="notes-main">
-      <!-- Top Section: Add Note -->
-      <div class="notes-header">
-        <div class="notes-title">📝 Project Notes</div>
-        <form class="add-note-form" @submit.prevent="addNote">
-          <!-- Removed note-type-select -->
-          <textarea
-            v-model="newNote"
-            class="note-input"
-            placeholder="Write a new note..."
-            rows="2"
-          />
-          <button class="add-btn" :disabled="!newNote.trim()">Add Note</button>
-        </form>
-      </div>
-      <!-- Notes List -->
-      <div class="notes-list">
-        <div v-if="notesFiltered.length === 0" class="empty-notes">
-          No notes yet. Start documenting your project insights!
-        </div>
-        <div
-          v-for="(note, idx) in notesSortedFiltered"
-          :key="note.id"
-          class="note-card large"
-        >
-          <div class="note-content" v-if="!note.editing">
-            {{ note.content }}
-          </div>
-          <textarea
-            v-else
-            v-model="note.editContent"
-            class="note-edit-input"
-            rows="2"
-          />
-          <div class="note-meta">
-            <span class="note-type">{{ note.type }}</span>
-            <span class="note-date"
-              >Created: {{ formatDate(note.createdAt) }}</span
-            >
-            <span class="note-date"
-              >Updated: {{ formatDate(note.updatedAt) }}</span
-            >
-            <div class="note-actions">
-              <button
-                v-if="!note.editing"
-                @click="editNote(idx)"
-                class="icon-btn"
-                title="Edit"
-              >
-                ✏️
-              </button>
-              <button
-                v-if="note.editing"
-                @click="saveEdit(idx)"
-                class="icon-btn save"
-                title="Save"
-              >
-                💾
-              </button>
-              <button
-                v-if="note.editing"
-                @click="cancelEdit(idx)"
-                class="icon-btn cancel"
-                title="Cancel"
-              >
-                ❌
-              </button>
-              <button
-                @click="downloadNote(note)"
-                class="icon-btn download"
-                title="Download Note"
-              >
-                ⬇️
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</template>
-
 <script setup>
-import { ref, computed } from "vue";
-import jsPDF from "jspdf";
+import { ref, computed, watch } from "vue";
+// import jsPDF from "jspdf";
 
-const noteTypes = ["General", "Meeting", "Ideas", "Research", "Personal"];
-const selectedType = ref('All');
-const notes = ref([]);
+import { useNoteStore, useProjectStore } from "../store";
+import { addItem } from "../actions/addItem";
+import { editItem } from "../actions/editItem";
+import LoadingSpinner from "../components/LoadingSpinner.vue";
+
+const projectStore = useProjectStore();
+const noteStore = useNoteStore();
+const currentType = ref("All");
+
 const newNote = ref("");
 const typeSearch = ref("");
-// Removed newNoteType
-
-function selectType(type) {
-  selectedType.value = type;
-}
-
-const filteredNoteTypes = computed(() => {
-  if (!typeSearch.value.trim()) return noteTypes;
-  return noteTypes.filter(type => type.toLowerCase().includes(typeSearch.value.trim().toLowerCase()));
-});
 
 function addNote() {
   if (!newNote.value.trim()) return;
-  notes.value.unshift({
-    id: Date.now() + Math.random(),
-    type: selectedType.value === 'All' ? noteTypes[0] : selectedType.value, // Default to first type if 'All' is selected
-    content: newNote.value.trim(),
-    editContent: "",
-    editing: false,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  });
-  newNote.value = "";
-}
 
-function deleteNote(idx) {
-  notes.value.splice(idx, 1);
+  const newNoteInfo = {
+    type: currentType.value,
+    created_date: new Date(),
+    updated_date: new Date(),
+    content: newNote.value.trim(),
+  };
+
+  noteStore.setLoading(true);
+
+  addItem("Notes", newNoteInfo).then((res) => {
+    noteStore.addNote({
+      ...newNoteInfo,
+      ID: res.ID,
+    });
+    newNote.value = "";
+    noteStore.setLoading(false);
+  });
 }
 
 function editNote(idx) {
-  notes.value[idx].editing = true;
-  notes.value[idx].editContent = notes.value[idx].content;
+  noteStore.notes[idx].editing = true;
+  noteStore.notes[idx].editContent = noteStore.notes[idx].content;
 }
 
 function saveEdit(idx) {
-  const note = notes.value[idx];
+  const note = noteStore.notes[idx];
+
   if (note.editContent.trim()) {
-    note.content = note.editContent.trim();
-    note.updatedAt = new Date();
+    noteStore.setLoading(true);
+
+    const editInfo = {
+      content: note.editContent.trim(),
+      updated_date: new Date(),
+    };
+
+    editItem("Notes", note.ID, editInfo).then((res) => {
+      noteStore.editNote({
+        ID: note.ID,
+        content: editInfo.content,
+        updated_date: editInfo.updated_date,
+      });
+      noteStore.setLoading(false);
+    });
+
+    delete note.editing;
   }
-  note.editing = false;
 }
 
 function cancelEdit(idx) {
-  notes.value[idx].editing = false;
+  delete noteStore.notes[idx].editing;
 }
 
 function formatDate(date) {
@@ -172,31 +74,136 @@ function formatDate(date) {
   return d.toLocaleString();
 }
 
-function downloadNote(note) {
-  const doc = new jsPDF();
-  doc.setFontSize(14);
-  doc.text(`Type: ${note.type}`, 10, 10);
-  doc.text(`Created: ${formatDate(note.createdAt)}`, 10, 20);
-  doc.text(`Updated: ${formatDate(note.updatedAt)}`, 10, 30);
-  doc.setFontSize(16);
-  doc.text("Note:", 10, 45);
-  doc.setFontSize(12);
-  const splitContent = doc.splitTextToSize(note.content, 180);
-  doc.text(splitContent, 10, 55);
-  doc.save(
-    `Note-${note.type}-${formatDate(note.createdAt).replace(/\W+/g, "_")}.pdf`
-  );
-}
+// function downloadNote(note) {
+//   const doc = new jsPDF();
+//   doc.setFontSize(14);
+//   doc.text(`Type: ${note.type}`, 10, 10);
+//   doc.text(`Created: ${formatDate(note.created_date)}`, 10, 20);
+//   doc.text(`Updated: ${formatDate(note.updated_date)}`, 10, 30);
+//   doc.setFontSize(16);
+//   doc.text("Note:", 10, 45);
+//   doc.setFontSize(12);
+//   const splitContent = doc.splitTextToSize(note.content, 180);
+//   doc.text(splitContent, 10, 55);
+//   doc.save(`Note-${note.type}-${formatDate(note.created_date).replace(/\W+/g, "_")}.pdf`);
+// }
 
 const notesFiltered = computed(() =>
-  selectedType.value === 'All'
-    ? notes.value
-    : notes.value.filter((n) => n.type === selectedType.value)
+  (currentType.value == "All" ? noteStore.notes : noteStore.notes.filter((n) => n.type == currentType.value)).sort(
+    (a, b) => b.updated_date - a.updated_date
+  )
 );
-const notesSortedFiltered = computed(() =>
-  notesFiltered.value.slice().sort((a, b) => b.updatedAt - a.updatedAt)
-);
+
+const pageSize = ref(3);
+const currentPage = ref(1);
+const totalPages = computed(() => Math.ceil(notesFiltered.value.length / pageSize.value));
+const paginatedNotes = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value;
+  return notesFiltered.value.slice(start, start + pageSize.value);
+});
+
+watch(notesFiltered, () => {
+  if (currentPage.value > totalPages.value) {
+    currentPage.value = 1;
+  }
+});
 </script>
+
+<template>
+  <LoadingSpinner :showing="loading" text="Loading notes...">
+    <div class="notes-layout">
+      <aside class="notes-sidebar">
+        <div class="sidebar-title">Note Types</div>
+        <input
+          v-model="typeSearch"
+          class="note-type-search"
+          type="text"
+          placeholder="Search types..."
+          style="
+            margin: 0 0 12px 0;
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1.5px solid #cbd5e1;
+            font-size: 1.05rem;
+            background: #f8fafc;
+            width: 90%;
+            align-self: center;
+          "
+        />
+        <ul class="note-types-list">
+          <li :class="{ selected: currentType === 'All' }" @click="currentType = 'All'">All</li>
+          <li
+            v-for="type in (projectStore.currentProject?.note_types || []).filter(
+              (item) => typeSearch == '' || item.toLowerCase().includes(typeSearch.toLowerCase())
+            )"
+            :key="type"
+            :class="{ selected: currentType === type }"
+            @click="currentType = type"
+          >
+            {{ type }}
+          </li>
+        </ul>
+      </aside>
+      <div class="notes-main">
+        <div class="notes-header">
+          <div class="notes-title">📝 Project Notes</div>
+          <form class="add-note-form" @submit.prevent="addNote">
+            <textarea v-model="newNote" class="note-input" placeholder="Write a new note..." rows="2" />
+            <button class="add-btn" :disabled="!newNote.trim()">Post</button>
+          </form>
+        </div>
+        <div class="notes-list">
+          <div v-if="notesFiltered.length === 0" class="empty-notes">
+            No notes yet. Start documenting your project insights!
+          </div>
+          <div v-for="(note, idx) in paginatedNotes" :key="note.ID" class="note-card large">
+            <div class="note-content" v-if="!note.editing">
+              {{ note.content }}
+            </div>
+            <textarea v-else v-model="note.editContent" class="note-edit-input" rows="2" />
+            <div class="note-meta">
+              <span class="note-type">{{ note.type }}</span>
+              <span class="note-date">Created: {{ formatDate(note.created_date) }}</span>
+              <span class="note-date">Updated: {{ formatDate(note.updated_date) }}</span>
+              <div class="note-actions">
+                <button
+                  v-if="!note.editing"
+                  @click="editNote(3 * (currentPage - 1) + idx)"
+                  class="icon-btn"
+                  title="Edit"
+                >
+                  ✏️
+                </button>
+                <button
+                  v-if="note.editing"
+                  @click="saveEdit(3 * (currentPage - 1) + idx)"
+                  class="icon-btn save"
+                  title="Save"
+                >
+                  💾
+                </button>
+                <button
+                  v-if="note.editing"
+                  @click="cancelEdit(3 * (currentPage - 1) + idx)"
+                  class="icon-btn cancel"
+                  title="Cancel"
+                >
+                  ↩️
+                </button>
+                <!-- <button @click="downloadNote(note)" class="icon-btn download" title="Download Note">⬇️</button> -->
+              </div>
+            </div>
+          </div>
+          <div class="pagination-controls" v-if="totalPages > 1">
+            <button @click="currentPage--" :disabled="currentPage === 1">Prev</button>
+            <span>Page {{ currentPage }} of {{ totalPages }}</span>
+            <button @click="currentPage++" :disabled="currentPage === totalPages">Next</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </LoadingSpinner>
+</template>
 
 <style lang="scss" scoped>
 .notes-layout {
@@ -330,8 +337,6 @@ const notesSortedFiltered = computed(() =>
   flex-direction: column;
   gap: 24px;
   margin-bottom: 32px;
-  overflow-y: auto;
-  max-height: calc(85vh - 260px);
   padding: 10px;
 }
 .empty-notes {
@@ -350,8 +355,7 @@ const notesSortedFiltered = computed(() =>
   gap: 12px;
   position: relative;
   transition: box-shadow 0.2s;
-  font-size: 1.25rem;
-  min-height: 120px;
+  font-size: 1rem;
   &:hover {
     box-shadow: 0 6px 24px rgba(99, 102, 241, 0.13);
   }
@@ -422,5 +426,26 @@ const notesSortedFiltered = computed(() =>
 .icon-btn.download:hover {
   color: #2563eb;
   background: #e0e7ff;
+}
+.pagination-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin: 16px 0;
+}
+.pagination-controls button {
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1.5px solid #6366f1;
+  background: #fff;
+  color: #6366f1;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.pagination-controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

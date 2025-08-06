@@ -1,364 +1,706 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from "vue";
+import { ref, watch, computed } from "vue";
+import * as XLSX from "xlsx";
+import { useQuasar } from "quasar";
 
-import { useTaskStore } from "../store";
+import { useProjectStore, useTaskStore } from "../store";
 import { addItem } from "../actions/addItem";
-import { getItem } from "../actions/getItem";
-import { editItem } from "../actions/editItem";
 import { deleteItem } from "../actions/deleteItem";
-import LoadingSpinner from '../components/LoadingSpinner.vue';
+import { editItem } from "../actions/editItem";
+import LoadingSpinner from "../components/LoadingSpinner.vue";
+import AddTask from "../components/AddTask.vue";
 
+const $q = useQuasar();
+
+const projectStore = useProjectStore();
 const taskStore = useTaskStore();
-
-const taskRows = ref([]);
-
-onMounted(() => {
-  taskStore.setLoading(true);
-  const fields = [
-    "ID", "project_name", "position", "task", "sub_task", "description", "groups", "architecture"
-  ];
-
-  getItem("Tasks", fields).then(async res => {
-    taskStore.setTasks(res);
-    await new Promise(resolve => setTimeout(resolve, 500));
-    taskStore.setLoading(false);
-  });
-});
-
-watch(
-  () => taskStore.taskList,
-  (source) => {
-    taskRows.value = source.map(task => ({
-      ...task,
-      key: task.ID,
-      selected: false,
-      isEditing: false
-    }));
-  },
-  { immediate: true, deep: true }
-);
 
 const searchText = ref("");
 
-const newTask = ref({
-  project_name: "",
-  position: "",
-  task: "",
-  sub_task: "",
-  description: "",
-  groups: "",
-  architecture: "",
-});
+const fileInput = ref(null);
 
-const showAddForm = ref(false);
-const newConfirmState = ref(false);
-const editingRowKey = ref(null);
-const editingColName = ref(null);
-const miniLoading = ref(false);
+const isImporting = ref(false);
+const importProgress = ref(0);
+const importTotal = ref(0);
+const importCurrent = ref(0);
 
-const columns = [
-  { name : "selected", align: "center", label: "", field: "selected", style: "width: 10px" },
-  { name : "project_name", align: "left", label: "Project Name", field: "project_name", style: "width: 100px" },
-  { name : "position", align: "left", label: "Position", field: "position", style: "width: 100px" },
-  { name : "task", align: "left", label: "Task", field: "task", style: "width: 100px" },
-  { name : "sub_task", align: "left", label: "SubTask", field: "sub_task", style: "width: 100px" },
-  { name : "description", align: "left", label: "Description", field: "description", style: "width: 200px" },
-  { name : "groups", align: "left", label: "Groups", field: "groups", style: "width: 150px" },
-  { name : "architecture", align: "left", label: "Architecture", field: "architecture", style: "width: 100px" },
-];
+const statusInfo = ref([]);
 
-const pagination = ref({
-  sortBy: 'desc',
-  descending: false,
-  page: 1,
-  rowsPerPage: 10
-})
+const handleFileUpload = async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
 
-const filteredTasks = () => {
-  if (!searchText.value) return taskRows.value;
+  isImporting.value = true;
+  importProgress.value = 0;
+  importCurrent.value = 0;
 
-  return taskRows.value.filter(
-    (task) =>
-      task.project_name.toLowerCase().includes(searchText.value.toLowerCase()) ||
-      task.position.toLowerCase().includes(searchText.value.toLowerCase()) ||
-      task.task.toLowerCase().includes(searchText.value.toLowerCase()) ||
-      task.sub_task.toLowerCase().includes(searchText.value.toLowerCase()) ||
-      task.description.toLowerCase().includes(searchText.value.toLowerCase()) ||
-      task.groups.toLowerCase().includes(searchText.value.toLowerCase()) ||
-      task.architecture.toLowerCase().includes(searchText.value.toLowerCase())
-  );
+  try {
+    const data = await file.arrayBuffer();
+    const workbook = XLSX.read(data);
+
+    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+
+    let jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+
+    const importedTasks = jsonData.map((row) => ({
+      project_name: String(row["ProjectName"] || ""),
+      phase: String(row["Phase"] || ""),
+      task: String(row["Task"] || ""),
+      sub_task: String(row["SubTask"] || ""),
+      description: String(row["Description"] || ""),
+      dependency: String(row["Dependency"] || ""),
+      groups: String(row["Groups"] || ""),
+      architecture: String(row["Architecture"] || ""),
+    }));
+
+    const validTasks = importedTasks.filter(
+      (t) => t.project_name.trim() && t.phase.trim() && t.task.trim() && t.sub_task.trim()
+    );
+
+    if (validTasks.length === 0) {
+      return;
+    }
+
+    importTotal.value = validTasks.length;
+    importCurrent.value = 0;
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (let i = 0; i < validTasks.length; i++) {
+      const task = validTasks[i];
+      task.task_progress = 0;
+      task.status = "Open";
+      task.pulled = false;
+      try {
+        const res = await addItem("Tasks", task);
+        taskStore.addTask({ ...task, ID: res.ID });
+        successCount++;
+
+        importCurrent.value = i + 1;
+        importProgress.value = Math.round((importCurrent.value / importTotal.value) * 100);
+      } catch (error) {
+        console.error("Failed to add task:", task, error);
+        errorCount++;
+      }
+    }
+
+    event.target.value = "";
+  } catch (error) {
+    console.error("Error importing file:", error);
+  } finally {
+    setTimeout(() => {
+      isImporting.value = false;
+      importProgress.value = 0;
+      importCurrent.value = 0;
+      importTotal.value = 0;
+    }, 1000);
+  }
 };
 
-const hasSelectedRows = () => {
-  return taskRows.value.some((task) => task.selected);
+const selectAllTasks = () => {
+  const getAllTaskIds = (nodes) => {
+    let taskIds = [];
+    for (const node of nodes) {
+      if (node.taskData) {
+        taskIds.push(node.key);
+      }
+      if (node.children) {
+        taskIds = taskIds.concat(getAllTaskIds(node.children));
+      }
+    }
+    return taskIds;
+  };
+
+  checkedNodes.value = getAllTaskIds(treeData.value);
+};
+
+const clearAllSelections = () => {
+  checkedNodes.value = [];
+};
+
+const hasCheckedRows = () => {
+  return checkedNodes.value.some((key) => {
+    return typeof key === "number" || !isNaN(parseInt(key));
+  });
 };
 
 const handleSearch = (value) => {
   searchText.value = value;
 };
 
-function isFieldInvalid(field, record) {
-  return ["project_name", "position", "task", "sub_task"].includes(field) && (!record[field] || record[field].trim() === "");
-}
+const pullCheckedTasks = async (pulled) => {
+  const selectedTaskIds = checkedItems.value.filter((item) => item.pulled != pulled).map((item) => item.ID);
 
-function isRowValid(record) {
-  return ["project_name", "position", "task", "sub_task"].every(f => record[f] && record[f].trim() !== "");
-}
+  if (selectedTaskIds.length == 0) return;
 
-const addNewRow = () => {
-  showAddForm.value = true;
+  let successed = 0;
 
-  newTask.value = {
-    project_name: "",
-    position: "",
-    task: "",
-    sub_task: "",
-    description: "",
-    groups: "",
-    architecture: "",
-  };
-};
-
-async function saveNewTask() {
-  newConfirmState.value = true;
-  if (!isRowValid(newTask.value)) return;
-
-  miniLoading.value = true;
-  try {
-    const res = await addItem("Tasks", newTask.value);
-    taskStore.addTask({
-      ...newTask.value,
-      ID: res.ID
-    });
-    showAddForm.value = false;
-    newConfirmState.value = false;
-  } finally {
-    await new Promise(resolve => setTimeout(resolve, 500));
-    miniLoading.value = false;
-  }
-}
-
-function cancelNewTask() {
-  showAddForm.value = false;
-  newConfirmState.value = false;
-}
-
-const deleteSelectedRows = () => {
-  const selectedIds = taskRows.value.filter(task => task.selected).map(task => task.ID);
-  deleteItem("Tasks", selectedIds).then(res => {
-    taskStore.deleteTasks(selectedIds);
-  })
-};
-
-const startEditing = (record, colName) => {
-  taskRows.value.forEach((task) => {
-    if (task !== record) {
-      task.isEditing = false;
-    }
+  const notif = $q.notify({
+    group: false,
+    timeout: 0,
+    spinner: true,
+    caption: `${0} / ${selectedTaskIds.length}`,
   });
-  record.isEditing = true;
-  record.originalData = { ...record };
-  editingRowKey.value = record.key;
-  editingColName.value = colName;
-};
 
-const saveRow = (record) => {
-  if (!isRowValid(record)) return;
-
-  const data = {
-    ID: record.ID,
-    project_name: record.project_name,
-    position: record.position,
-    task: record.task,
-    sub_task: record.sub_task,
-    description: record.description,
-    groups: record.groups,
-    architecture: record.architecture,
-  };
-
-  editItem("Tasks", record.ID, data).then(res => {
-    taskStore.editTask(data);
-  })
-  editingRowKey.value = null;
-  editingColName.value = null;
-};
-
-const handleKeyDown = (event, record) => {
-  if (event.key === "Enter") {
-    saveRow(record);
-  } else if (event.key === "Escape") {
-    if (record.originalData) {
-      Object.assign(record, record.originalData);
-      delete record.originalData;
-    }
-    record.isEditing = false;
-    editingRowKey.value = null;
-    editingColName.value = null;
-  }
-};
-
-const cancelAllEditing = () => {
-  taskRows.value.forEach((task) => {
-    if (task.isEditing) {
-      if (task.originalData) {
-        Object.assign(task, task.originalData);
-        delete task.originalData;
+  for (const ID of selectedTaskIds) {
+    editItem("Tasks", ID, { pulled }).then(() => {
+      taskStore.editTask({ ID, pulled });
+      successed++;
+      notif({
+        caption: `${successed} / ${selectedTaskIds.length}`,
+      });
+      if (successed == selectedTaskIds.length) {
+        notif({
+          icon: "done",
+          spinner: false,
+          timeout: 500,
+        });
       }
-      task.isEditing = false;
-    }
-  });
-  editingRowKey.value = null;
-  editingColName.value = null;
-};
-
-const handleGlobalClick = (event) => {
-  const editingRow = event.target.closest('.editing-row');
-  if (!editingRow) {
-    cancelAllEditing();
+    });
   }
 };
 
-onMounted(() => {
-  document.addEventListener('click', handleGlobalClick, true);
+const deleteCheckedRows = async () => {
+  if (!confirm("Are you sure you want to delete the selected subtasks?")) return;
+
+  const checkedTaskIds = checkedItems.value.map((item) => item.ID);
+
+  if (checkedTaskIds.length === 0) return;
+
+  checkedTaskIds.forEach((ID) => {
+    deleteItem("Tasks", ID);
+  });
+
+  taskStore.deleteTasks(checkedTaskIds);
+  checkedNodes.value = [];
+};
+
+// Tree structure for tasks
+const treeData = computed(() => {
+  const projects = {};
+
+  taskStore.tasks
+    .filter((item) => item.project_name == projectStore.currentProjectTitle)
+    .forEach((task) => {
+      if (!task.project_name || !task.phase || !task.task || !task.sub_task) return;
+
+      if (!projects[task.project_name]) {
+        projects[task.project_name] = {
+          key: `project-${task.project_name}`,
+          label: task.project_name,
+          icon: "folder",
+          children: {},
+        };
+      }
+
+      if (!projects[task.project_name].children[task.phase]) {
+        projects[task.project_name].children[task.phase] = {
+          key: `phase-${task.project_name}-${task.phase}`,
+          label: task.phase,
+          icon: "folder_open",
+          children: {},
+        };
+      }
+
+      if (!projects[task.project_name].children[task.phase].children[task.task]) {
+        projects[task.project_name].children[task.phase].children[task.task] = {
+          key: `task-${task.project_name}-${task.phase}-${task.task}`,
+          label: task.task,
+          icon: "assignment",
+          children: {},
+        };
+      }
+
+      if (!projects[task.project_name].children[task.phase].children[task.task].children[task.sub_task]) {
+        projects[task.project_name].children[task.phase].children[task.task].children[task.sub_task] = {
+          key: task.ID,
+          label: task.sub_task,
+          icon: "list",
+          taskData: task,
+          children: [],
+          checkable: true, // Make leaf nodes checkable
+        };
+      }
+    });
+
+  // Convert to array format for q-tree
+  return Object.values(projects).map((project) => ({
+    ...project,
+    children: Object.values(project.children).map((phase) => ({
+      ...phase,
+      children: Object.values(phase.children).map((task) => ({
+        ...task,
+        children: Object.values(task.children),
+      })),
+    })),
+  }));
 });
 
-onUnmounted(() => {
-  document.removeEventListener('click', handleGlobalClick, true);
+const expandedNodes = ref([]);
+const selectedNodes = ref([]);
+const checkedNodes = ref([]);
+const breadcrumbs = ref([]);
+const currentPath = ref([]);
+
+watch(
+  () => [projectStore.currentProjectTitle],
+  ([source]) => {
+    statusInfo.value = projectStore.currentProject?.status || [];
+  },
+  { immediate: true, deep: true }
+);
+
+const filteredTreeData = computed(() => {
+  if (!searchText.value) return treeData.value;
+
+  const filterNode = (node) => {
+    if (node.taskData) {
+      const task = node.taskData;
+      const searchLower = searchText.value.toLowerCase();
+      const matches =
+        (task.project_name && task.project_name.toLowerCase().includes(searchLower)) ||
+        (task.phase && task.phase.toLowerCase().includes(searchLower)) ||
+        (task.task && task.task.toLowerCase().includes(searchLower)) ||
+        (task.sub_task && task.sub_task.toLowerCase().includes(searchLower)) ||
+        (task.description && task.description.toLowerCase().includes(searchLower)) ||
+        (task.groups && task.groups.toLowerCase().includes(searchLower)) ||
+        (task.architecture && task.architecture.toLowerCase().includes(searchLower));
+
+      if (matches) {
+        const expandParents = (nodes, targetKey) => {
+          for (const n of nodes) {
+            if (n.children) {
+              for (const child of n.children) {
+                if (child.key === targetKey || expandParents([child], targetKey)) {
+                  if (!expandedNodes.value.includes(n.key)) {
+                    expandedNodes.value.push(n.key);
+                  }
+                  return true;
+                }
+              }
+            }
+          }
+          return false;
+        };
+        expandParents(treeData.value, node.key);
+      }
+
+      return matches;
+    } else {
+      // For parent nodes, check if any child matches
+      const hasMatchingChild = node.children && node.children.some((child) => filterNode(child));
+      if (hasMatchingChild && !expandedNodes.value.includes(node.key)) {
+        expandedNodes.value.push(node.key);
+      }
+      return hasMatchingChild;
+    }
+  };
+
+  return treeData.value.filter((project) => filterNode(project));
 });
 
+// Breadcrumb functions
+const updateBreadcrumbs = (node) => {
+  if (!node) return;
+
+  // Build the complete path to the clicked node
+  const buildPathToNode = (nodes, targetKey, currentPath = []) => {
+    for (const n of nodes) {
+      const newPath = [...currentPath, { label: n.label, key: n.key }];
+
+      if (n.key === targetKey) {
+        return newPath;
+      }
+
+      if (n.children) {
+        const found = buildPathToNode(n.children, targetKey, newPath);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  // Find the complete path to the clicked node
+  const path = buildPathToNode(treeData.value, node.key);
+  if (path) {
+    breadcrumbs.value = path;
+    currentPath.value = path;
+  }
+};
+
+const checkedItems = computed(() => {
+  return checkedNodes.value
+    .filter((key) => typeof key === "number" || !isNaN(parseInt(key)))
+    .map((key) => {
+      const findTaskInTree = (nodes) => {
+        for (const node of nodes) {
+          if (node.key === key && node.taskData) {
+            return node.taskData;
+          }
+          if (node.children) {
+            const found = findTaskInTree(node.children);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+      return findTaskInTree(treeData.value);
+    })
+    .filter((task) => task !== null);
+});
+
+const highlightSearchText = (text) => {
+  if (!searchText.value || !text) return text;
+
+  const regex = new RegExp(`(${searchText.value})`, "gi");
+  return text.replace(regex, '<mark class="search-highlight">$1</mark>');
+};
+
+const isNodeMatchingSearch = (node) => {
+  if (!searchText.value) return false;
+
+  if (node.taskData) {
+    const task = node.taskData;
+    const searchLower = searchText.value.toLowerCase();
+    return (
+      (task.project_name && task.project_name.toLowerCase().includes(searchLower)) ||
+      (task.phase && task.phase.toLowerCase().includes(searchLower)) ||
+      (task.task && task.task.toLowerCase().includes(searchLower)) ||
+      (task.sub_task && task.sub_task.toLowerCase().includes(searchLower)) ||
+      (task.description && task.description.toLowerCase().includes(searchLower)) ||
+      (task.groups && task.groups.toLowerCase().includes(searchLower)) ||
+      (task.architecture && task.architecture.toLowerCase().includes(searchLower))
+    );
+  }
+
+  return node.label && node.label.toLowerCase().includes(searchText.value.toLowerCase());
+};
 </script>
 
 <template>
   <q-card class="tasklist-body">
-    <LoadingSpinner :showing="taskStore.loading" text="Loading tasks...">
+    <LoadingSpinner :showing="projectStore.loading || taskStore.loading" text="Loading tasks...">
       <div>
-        <div
-          style="
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin: 3rem 0;
-          "
-        >
-          <div style="flex: 1; max-width: 300px">
-            <q-input white dense outlined rounded placeholder="Search tasks..." @search="handleSearch" style="width: 100%" v-model="searchText" class="q-ml-md">
+        <div class="tasklist-toolbar">
+          <div class="tasklist-toolbar-left">
+            <q-input
+              white
+              dense
+              outlined
+              rounded
+              placeholder="Search tasks..."
+              @search="handleSearch"
+              v-model="searchText"
+              class="tasklist-search-input"
+              :disable="isImporting"
+            >
               <template v-slot:append>
                 <q-icon v-if="searchText === ''" name="search" />
                 <q-icon v-else name="clear" class="cursor-pointer" @click="searchText = ''" />
               </template>
             </q-input>
           </div>
-          <div>
-            <q-btn
-              color="primary"
-              icon="add"
-              @click="addNewRow"
-              style="margin-right: 8px"
-            >
-              <div>Add</div>
-            </q-btn>
-            <q-btn
-              color="red"
-              icon="delete"
-              @click="deleteSelectedRows"
-              :disabled="!hasSelectedRows"
-            >
-              <div>Delete</div>
-            </q-btn>
-          </div>
-        </div>
-
-        <!-- Add Task Form -->
-        <div v-if="showAddForm" class="q-pa-md" style="background: #f9f9f9; border-radius: 8px; margin-bottom: 1rem;">
-          <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
-            <q-input v-for="field in ['project_name','position','task','sub_task','description','groups','architecture']"
-              :key="field"
-              v-model="newTask[field]"
-              :label="field.charAt(0).toUpperCase() + field.slice(1)"
-              dense outlined :error="isFieldInvalid(field, newTask) && newConfirmState"
-              :error-message="(isFieldInvalid(field, newTask) && newConfirmState) ? 'Required' : ''"
-              style="min-width: 120px; max-width: 190px;"
-            />
-          </div>
-          <div class="q-mt-md" style="text-align: right; margin-right: 30px;">
-            <q-btn color="primary" @click="saveNewTask" :loading="miniLoading">
-              <template v-slot:loading>
-                <q-spinner size="18px" color="white" />
-              </template>
-              Save
-            </q-btn>
-            <q-btn flat @click="cancelNewTask" class="q-ml-sm">Cancel</q-btn>
-          </div>
-        </div>
-
-        <!-- Table -->
-        <q-table
-          :columns="columns"
-          :rows="filteredTasks()"
-          row-key="name"
-          bordered
-          size="small"
-          separator="horizontal"
-          style="border: 1px solid #ececec;"
-          :pagination="pagination"
-        >
-          <template v-slot:body="props">
-            <q-tr :props="props" :key="props.row.key" :class="{ 'editing-row': props.row.isEditing }">
-              <q-td
-                v-for="col in props.cols"
-                :key="col.name"
-                :props="props"
+          <div class="tasklist-toolbar-right">
+            <template v-if="checkedItems.length > 0">
+              <q-btn color="secondary" icon="check" @click="pullCheckedTasks(true)" label="Pull" size="sm" />
+              <q-btn color="purple" @click="pullCheckedTasks(false)" class="q-ml-sm" label="Push" size="sm" />
+              <q-btn
+                color="red"
+                class="q-mx-lg"
+                icon="delete"
+                @click="deleteCheckedRows"
+                :disabled="!hasCheckedRows || isImporting"
               >
-                <template v-if="col.name === 'selected'">
-                  <q-checkbox v-model="props.row.selected" />
+                <q-badge v-if="checkedItems.length > 0" color="red" floating rounded class="q-ml-xs">
+                  {{ checkedItems.length }}
+                </q-badge>
+              </q-btn>
+            </template>
+
+            <q-btn
+              color="pink-7"
+              icon="unfold_less"
+              @click="expandedNodes = treeData.map((node) => node.key)"
+              class="q-mr-lg"
+              title="Collapse"
+            />
+
+            <q-btn
+              color="secondary"
+              icon="select_all"
+              title="Select All"
+              @click="selectAllTasks"
+              :disabled="isImporting"
+              class="mr-8"
+              size="sm"
+            />
+
+            <q-btn
+              color="grey"
+              icon="clear_all"
+              title="Deselect"
+              @click="clearAllSelections"
+              :disabled="checkedItems.length === 0 || isImporting"
+              class="mr-24"
+              size="sm"
+            />
+
+            <AddTask />
+
+            <q-btn
+              color="secondary"
+              icon="file_upload"
+              label="Import Excel"
+              class="q-ml-lg"
+              @click="$refs.fileInput.click()"
+              :disable="isImporting"
+            />
+
+            <input type="file" ref="fileInput" style="display: none" accept=".xls,.xlsx" @change="handleFileUpload" />
+          </div>
+        </div>
+
+        <div class="tasklist-template-link">
+          Download /
+          <a href="/data/tasklist_template.xlsx" download="Task List (template).xlsx">Task List (template).xlsx</a>
+        </div>
+
+        <div v-if="isImporting" class="q-pa-md tasklist-importing-box">
+          <div class="text-h6 q-mb-sm importing-title">
+            <q-icon name="file_upload" class="q-mr-sm" />
+            Importing Excel Data...
+          </div>
+          <div class="q-mb-sm">
+            <div class="text-caption q-mb-xs">
+              Progress: {{ importCurrent }} / {{ importTotal }} tasks ({{ importProgress }}%)
+            </div>
+            <q-linear-progress :value="importProgress / 100" color="primary" size="md" class="import-progress-bar" />
+          </div>
+          <div class="text-caption" style="color: #666">Please wait while tasks are being imported...</div>
+        </div>
+
+        <div class="tree-container tasklist-tree-box">
+          <q-tree
+            :nodes="filteredTreeData"
+            node-key="key"
+            :expanded="expandedNodes"
+            :selected="selectedNodes"
+            :checked="checkedNodes"
+            @update:expanded="expandedNodes = $event"
+            @update:selected="selectedNodes = $event"
+            @update:checked="checkedNodes = $event"
+            :disable="isImporting"
+          >
+            <template v-slot:default-header="prop">
+              <div
+                class="row items-center full-width cursor-pointer"
+                @click="updateBreadcrumbs(prop.node)"
+                :class="{
+                  'search-match': isNodeMatchingSearch(prop.node),
+                  'checked-item': checkedNodes.includes(prop.node.key) && prop.node.taskData,
+                }"
+                :data-key="prop.node.key"
+              >
+                <q-checkbox
+                  v-if="prop.node.taskData"
+                  v-model="checkedNodes"
+                  :val="prop.node.key"
+                  @click.stop
+                  class="q-mr-sm"
+                  color="primary"
+                />
+                <q-icon :name="prop.node.icon" class="q-mr-sm" />
+                <span class="text-weight-medium" v-html="highlightSearchText(prop.node.label)"></span>
+                <q-space />
+                <template v-if="prop.node.taskData">
+                  <q-chip
+                    v-if="prop.node.taskData.description"
+                    size="sm"
+                    color="blue-grey-1"
+                    text-color="blue-grey-8"
+                    class="q-mr-xs"
+                  >
+                    <q-tooltip>
+                      <strong>Description:</strong><br />
+                      {{ prop.node.taskData.description }}
+                    </q-tooltip>
+                    <span v-html="highlightSearchText(prop.node.taskData.description)"></span>
+                  </q-chip>
+                  <q-chip
+                    v-if="prop.node.taskData.groups"
+                    size="sm"
+                    color="green-1"
+                    text-color="green-8"
+                    class="q-mr-xs"
+                  >
+                    <q-tooltip>
+                      <strong>Groups:</strong><br />
+                      {{ prop.node.taskData.groups }}
+                    </q-tooltip>
+                    <span v-html="highlightSearchText(prop.node.taskData.groups)"></span>
+                  </q-chip>
+                  <q-chip v-if="prop.node.taskData.architecture" size="sm" color="orange-1" text-color="orange-8">
+                    <q-tooltip>
+                      <strong>Architecture:</strong><br />
+                      {{ prop.node.taskData.architecture }}
+                    </q-tooltip>
+                    <span v-html="highlightSearchText(prop.node.taskData.architecture)"></span>
+                  </q-chip>
+                  <q-chip
+                    v-if="prop.node.taskData.pulled"
+                    size="sm"
+                    color="green-3"
+                    text-color="green-10"
+                    class="q-ml-xs q-mr-none"
+                  >
+                    <q-icon name="check" left size="16px" />
+                    Pulled
+                  </q-chip>
                 </template>
-                <template v-else-if="['project_name', 'position', 'task', 'sub_task', 'description', 'groups', 'architecture'].includes(col.name)">
-                  <template v-if="props.row.isEditing">
-                    <q-input
-                      ref="inputField"
-                      dense
-                      :autofocus="editingRowKey === props.row.key && editingColName === col.name"
-                      @keydown="(e) => handleKeyDown(e, props.row)"
-                      outlined
-                      v-model="props.row[col.name]"
-                      :error="isFieldInvalid(col.name, props.row)"
-                      :error-message="isFieldInvalid(col.name, props.row) ? 'Required' : ''"
-                    />
-                  </template>
-                  <template v-else>
-                    <span
-                      @dblclick="startEditing(props.row, col.name)"
-                      style="cursor: pointer; display: block; padding: 4px"
-                    >
-                      {{ props.row[col.name] !== '' ? props.row[col.name] : '\u00A0' }}
-                    </span>
-                  </template>
-                </template>
-                <template v-else>
-                  <q-td :props="props">
-                    <span
-                      @dblclick.stop="startEditing(props.row, col.name)"
-                      style="cursor: pointer; display: block; padding: 4px"
-                    >
-                      {{ props.row[col.name] !== '' ? props.row[col.name] : '\u00A0' }}
-                    </span>
-                  </q-td>
-                </template>
-              </q-td>
-            </q-tr>
-          </template>
-        </q-table>
+              </div>
+            </template>
+          </q-tree>
+        </div>
       </div>
     </LoadingSpinner>
   </q-card>
 </template>
 
 <style lang="scss" scoped>
+.tasklist-addform-box {
+  min-width: 800px;
+  background: #f9f9f9;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+.tasklist-addform-actions {
+  text-align: right;
+  margin-right: 24px;
+}
+.disabled-form {
+  opacity: 0.6;
+  pointer-events: none;
+}
 .tasklist-body {
   margin: 2rem;
   padding: 2rem;
   background: #ffffff;
-  min-height: 80vh;
+  min-height: calc(100vh - 100px - 4rem);
   border-radius: 15px;
+}
+.tasklist-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.tasklist-toolbar-left {
+  flex: 1;
+  max-width: 300px;
+}
+.tasklist-toolbar-right {
+  display: flex;
+  align-items: center;
+}
+.tasklist-search-input {
+  width: 100%;
+}
+.tasklist-template-link {
+  text-align: right;
+  margin-bottom: 1rem;
+}
+.tasklist-importing-box {
+  background: #f0f8ff;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  border: 1px solid #e3f2fd;
+}
+.tasklist-addform-box {
+  min-width: 800px;
+  background: #f9f9f9;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+.tasklist-addform-actions {
+  text-align: right;
+  margin-right: 24px;
+}
+.tasklist-tree-box {
+  border: 1px solid #ececec;
+  border-radius: 8px;
+  background: white;
+  padding: 12px;
+  height: calc(100vh - 260px - 4rem);
+  overflow-y: scroll;
+}
+.disabled-form {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.search-highlight {
+  background-color: #ffeb3b;
+  color: #000;
+  padding: 1px 2px;
+  border-radius: 2px;
+  font-weight: bold;
+}
+.search-match {
+  background-color: #e3f2fd;
+  border-radius: 4px;
+  padding: 2px;
+}
+.tree-container .q-tree__node--selected {
+  background-color: #e8f5e8;
+}
+.tree-container .q-tree__node--selected .search-match {
+  background-color: #c8e6c9;
+}
+.checked-item {
+  background-color: #e8f5e8 !important;
+  border-left: 3px solid #4caf50 !important;
+  padding-left: 8px;
+}
+.checked-item.search-match {
+  background-color: #c8e6c9 !important;
+}
+.node-highlight {
+  background-color: #e3f2fd !important;
+  border: 2px solid #1976d2 !important;
+  border-radius: 4px;
+  animation: pulse 2s ease-in-out;
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+.chip-pulled,
+.chip-pull {
+  position: absolute;
+  right: 12px;
+  top: 10px;
+  z-index: 2;
+}
+.mr-8 {
+  margin-right: 8px;
+}
+.ml-16 {
+  margin-left: 16px;
+}
+.mr-24 {
+  margin-right: 24px;
+}
+.importing-title {
+  color: #1976d2;
+}
+.import-progress-bar {
+  height: 8px;
 }
 </style>

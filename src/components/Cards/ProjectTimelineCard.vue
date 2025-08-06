@@ -1,13 +1,9 @@
 <template>
-	<div>
-		<ProjectTimelineChart />
-	</div>
-
+  <ProjectTimelineChart />
 </template>
 
 <script setup>
-	import ProjectTimelineChart from '../Charts/ProjectTimeline.vue'
+import ProjectTimelineChart from "../Charts/ProjectTimeline.vue";
 
-	defineExpose({})
-
+defineExpose({});
 </script>

@@ -1,312 +1,234 @@
-<template>
-  <q-card class="daily-tasks-body">
-    <!-- Header Bar with Datepicker -->
-    <div class="kanban-header-bar">
-      <button
-        class="kanban-create-btn kanban-create-btn-large"
-        @click="addBoard"
-      >
-        <span class="plus">+</span> Add Board
-      </button>
-      <div class="kanban-header-actions">
-        <input type="date" v-model="selectedDate" class="kanban-datepicker" />
-      </div>
-    </div>
-    <div class="kanban-board">
-      <div
-        class="kanban-column"
-        v-for="(column, colIdx) in columns"
-        :key="column.id"
-      >
-        <div class="kanban-header">
-          <div class="kanban-header-left">
-            <span
-              v-if="!column.editing" class="kanban-title" @dblclick="startEditTitle(colIdx)"
-              >{{ column.title }}</span>
-            <input
-              v-else
-              :ref="el => boardTitleInputs[colIdx] = el"
-              class="kanban-title-input"
-              v-model="column.title"
-              @blur="saveBoardTitle(colIdx)"
-              @keyup.enter="saveBoardTitle(colIdx)"
-              :style="{ width: '210px' }"
-            />
-            <span v-if="column.tasks.length" class="kanban-count">{{
-              column.tasks.length
-            }}</span>
-          </div>
-          <div class="kanban-header-right">
-            <q-btn flat dense round icon="add" @click="toggleAddTask(colIdx)" />
-            <q-btn flat dense round icon="delete" @click="deleteBoard(colIdx)" />
-          </div>
-        </div>
-
-        <div>
-          <div v-if="column.showingAddTask" class="kanban-add-task-inline">
-            <div class="kanban-add-task-select-row">
-              <select
-                v-model="column.selectedTaskId"
-                class="kanban-add-task-select"
-                style="width: 180px"
-              >
-                <option value="">Select a task...</option>
-                <option
-                  v-for="task in availableTasks"
-                  :key="task.id"
-                  :value="task.id"
-                >
-                  {{ task.title }} ({{ task.code }})
-                </option>
-              </select>
-            </div>
-            <div class="kanban-add-task-buttons">
-              <button
-                class="kanban-add-task-confirm-btn"
-                @click="confirmAddTask(colIdx)"
-                :disabled="!column.selectedTaskId"
-              >
-                Add
-              </button>
-              <button
-                class="kanban-add-task-cancel-btn"
-                @click="cancelAddTask(colIdx)"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-
-          <draggable
-            v-model="column.tasks"
-            group="tasks"
-            :animation="200"
-            item-key="id"
-            class="kanban-tasks"
-            @end="onDragEnd"
-          >
-            <template #item="{ element: task, index }">
-              <div class="kanban-card">
-                <div class="kanban-card-title-row">
-                  <span class="kanban-card-title">{{ task.title }}</span>
-                  <q-btn flat dense round icon="delete" color="negative" @click="deleteTask(colIdx, index)" />
-                </div>
-                <div class="kanban-card-meta">
-                  <span class="kanban-card-id">{{ task.code }}</span>
-                </div>
-              </div>
-            </template>
-            <template #footer>
-              <div v-if="!column.tasks.length" class="kanban-empty-placeholder">
-                Drop tasks here
-              </div>
-            </template>
-          </draggable>
-        </div>
-      </div>
-    </div>
-  </q-card>
-</template>
-
 <script setup>
-import {
-  reactive,
-  ref,
-  onMounted,
-  onBeforeUnmount,
-  nextTick,
-  computed,
-} from "vue";
+import { ref, onMounted, computed, watch } from "vue";
 import draggable from "vuedraggable";
 
-const boardTitleInputs = ref([]);
+import { useProjectStore, useTaskModalStore, useTaskStore } from "../store";
+import { getItem } from "../actions/getItem";
+import { editItem } from "../actions/editItem";
+import LoadingSpinner from "../components/LoadingSpinner.vue";
+import AddTask from "../components/AddTask.vue";
+
+const projectStore = useProjectStore();
+const taskStore = useTaskStore();
+const taskModalStore = useTaskModalStore();
+
 const selectedDate = ref(new Date().toISOString().substr(0, 10));
 
-const columns = reactive([
-  {
-    id: "todo",
-    title: "TO DO",
-    editing: false,
-    tasks: [],
-    showingAddTask: false,
-    selectedTaskId: "",
-    menu: false, // Added for Quasar menu
-  },
-  {
-    id: "inprogress",
-    title: "IN PROGRESS",
-    editing: false,
-    tasks: [],
-    showingAddTask: false,
-    selectedTaskId: "",
-    menu: false, // Added for Quasar menu
-  },
-  {
-    id: "done",
-    title: "DONE",
-    editing: false,
-    tasks: [],
-    showingAddTask: false,
-    selectedTaskId: "",
-    menu: false, // Added for Quasar menu
-  },
-]);
+const dragInfo = ref(null);
+const miniLoading = ref({});
+const showDailyTasks = ref(true);
 
-// Master list of all possible tasks
-const allTasks = [
-  { id: 1, title: "Design UI", code: "T-101" },
-  { id: 2, title: "Setup Backend", code: "T-102" },
-  { id: 3, title: "Write Docs", code: "T-103" },
-  { id: 4, title: "Testing", code: "T-104" },
-  { id: 5, title: "Testing1", code: "T-104" },
-  { id: 6, title: "Testing2", code: "T-104" },
-  { id: 7, title: "Testing3", code: "T-104" },
-  { id: 8, title: "Testing4", code: "T-104" },
-];
+watch(
+  () => selectedDate.value,
+  (source) => {
+    watchCallback(source);
+  },
+  { immediate: true, deep: true }
+);
 
-// Computed: tasks not present in any board
-const availableTasks = computed(() => {
-  const usedIds = new Set();
-  columns.forEach((col) => {
-    col.tasks.forEach((task) => usedIds.add(task.id));
+function watchCallback(source) {}
+
+function isTaskOnSelectedDate(task) {
+  if (!task.start_date || !task.duration) return false;
+  const start = new Date(task.start_date);
+  const duration = parseInt(task.duration) || 1;
+  const end = new Date(start);
+  end.setDate(start.getDate() + duration - 1);
+  const selected = selectedDate.value;
+  return selected >= start.toISOString().slice(0, 10) && selected <= end.toISOString().slice(0, 10);
+}
+
+const columns = computed(() => {
+  if (!projectStore.currentProjectTitle) return [];
+
+  return projectStore.currentProject.status.map((status, index) => {
+    let statusTasks = taskStore.tasks.filter((task) => {
+      if (task.project_name != projectStore.currentProjectTitle || !task.pulled || !task.status) return false;
+      const match = task.status.match(/^([^#]+)/);
+      const taskStatusName = match ? match[1].trim() : task.status;
+      return taskStatusName === status.name;
+    });
+    if (showDailyTasks.value) {
+      statusTasks = statusTasks.filter(isTaskOnSelectedDate);
+    }
+
+    return {
+      id: `status-${index}`,
+      title: status.name,
+      editing: false,
+      tasks: statusTasks.map((task) => ({
+        id: task.ID,
+        title: task.sub_task,
+        code: task.ID,
+      })),
+      showingAddTask: false,
+      selectedTaskId: "",
+      menu: false,
+    };
   });
-  return allTasks.filter((task) => !usedIds.has(task.id));
 });
 
-// Add Board
-function addBoard() {
-  const newId = `board-${Date.now()}`;
-  columns.push({
-    id: newId,
-    title: "New Board",
-    editing: false,
-    tasks: [],
-    showingAddTask: false,
-    selectedTaskId: "",
-    menu: false, // Added for Quasar menu
-  });
+function onDragStart(originColIdx) {
+  return (event) => {
+    dragInfo.value = {
+      originColIdx,
+      originBoard: columns.value[originColIdx],
+      originTaskIdx: event.oldIndex,
+      task: columns.value[originColIdx].tasks[event.oldIndex],
+    };
+  };
 }
-function deleteBoard(colIdx) {
-  if (columns.length > 1) columns.splice(colIdx, 1);
-}
+function onTaskAdd(destColIdx) {
+  return (event) => {
+    const origin = dragInfo.value;
 
-function saveBoardTitle(colIdx) {
-  columns[colIdx].editing = false;
-}
+    taskStore.editTask({
+      ID: origin.task.id,
+      status: columns.value[destColIdx].title,
+    });
 
-function startEditTitle(colIdx) {
-  columns[colIdx].editing = true;
-  nextTick(() => {
-    const input = boardTitleInputs.value[colIdx];
-    if (input) {
-      input.focus();
-      input.select();
-    }
-  });
+    editItem("Tasks", origin.task.id, {
+      status: columns.value[destColIdx].title,
+    });
+  };
+}
+function onDragEnd(destColIdx) {
+  return (event) => {
+    dragInfo.value = null;
+  };
 }
 
-// Inline Add Task Logic
-function toggleAddTask(colIdx) {
-  columns[colIdx].showingAddTask = !columns[colIdx].showingAddTask;
-  if (columns[colIdx].showingAddTask) {
-    columns[colIdx].selectedTaskId = availableTasks.value.length
-      ? availableTasks.value[0].id
-      : "";
-  }
-}
-
-function confirmAddTask(colIdx) {
-  if (!columns[colIdx].selectedTaskId) return;
-
-  const task = allTasks.find((t) => t.id === columns[colIdx].selectedTaskId);
+function onTaskClick(ID) {
+  const task = taskStore.tasks.find((item) => item.ID == ID);
   if (task) {
-    // Prevent duplicate in the same board (shouldn't happen due to filtering, but safe)
-    const exists = columns[colIdx].tasks.some((t) => t.id === task.id);
-    if (!exists) {
-      columns[colIdx].tasks.push({
-        ...task,
-      });
-    }
+    taskModalStore.openEdit(task);
   }
-
-  // Reset the add task form
-  columns[colIdx].showingAddTask = false;
-  columns[colIdx].selectedTaskId = "";
 }
 
-function cancelAddTask(colIdx) {
-  columns[colIdx].showingAddTask = false;
-  columns[colIdx].selectedTaskId = "";
-}
-
-function deleteTask(colIdx, taskIdx) {
-  columns[colIdx].tasks.splice(taskIdx, 1);
-}
-
-function onDragEnd() {
-  // Optionally show a message or handle persistence
-}
-
-// End editing on outside click (only for board titles now)
-function handleClickOutside(event) {
-  columns.forEach((col, colIdx) => {
-    if (col.editing) {
-      const input = document.querySelectorAll(".kanban-title-input")[colIdx];
-      if (input && !input.contains(event.target)) {
-        saveBoardTitle(colIdx);
-      }
-    }
-  });
-}
-
-onMounted(() => {
-  document.addEventListener("mousedown", handleClickOutside);
-});
-onBeforeUnmount(() => {
-  document.removeEventListener("mousedown", handleClickOutside);
+onMounted(async () => {
+  if (selectedDate.value) {
+    watchCallback(selectedDate.value);
+  }
 });
 </script>
+
+<template>
+  <LoadingSpinner :showing="projectStore.loading || taskStore.loading" text="Loading daily tasks...">
+    <q-card class="daily-tasks-body">
+      <div>
+        <label>
+          <input type="checkbox" v-model="showDailyTasks" />
+          Daily tasks
+        </label>
+        <input type="date" v-model="selectedDate" class="kanban-datepicker" :disabled="!showDailyTasks" />
+        <div style="float: right">
+          <AddTask />
+        </div>
+      </div>
+      <div class="kanban-board">
+        <div class="kanban-column" v-for="(column, colIdx) in columns" :key="column.id">
+          <div class="kanban-header">
+            <div class="kanban-header-left">
+              <span v-if="!column.editing" class="kanban-title">
+                <span
+                  v-if="selectedProject"
+                  class="status-chip"
+                  :style="{
+                    backgroundColor: projectStore.currentProject.statusColor[column.title],
+                    color: '#fff',
+                    padding: '2px 10px',
+                    borderRadius: '10px',
+                    fontWeight: 500,
+                    fontSize: '13px',
+                    marginRight: '8px',
+                    display: 'inline-block',
+                  }"
+                >
+                  {{ column.title }}
+                </span>
+                <span v-else>
+                  {{ column.title }}
+                </span>
+              </span>
+              <span v-if="Array.isArray(column.tasks) && column.tasks.length" class="kanban-count">
+                {{ column.tasks.length }}
+              </span>
+              <q-spinner-pie v-if="miniLoading[column.id]" size="18px" color="primary" class="mini-spinner" />
+            </div>
+            <div class="kanban-header-right"></div>
+          </div>
+
+          <div>
+            <draggable
+              v-model="column.tasks"
+              group="tasks"
+              :animation="200"
+              item-key="id"
+              class="kanban-tasks"
+              @start="(event) => onDragStart(colIdx)(event)"
+              @add="(event) => onTaskAdd(colIdx)(event)"
+              @end="(event) => onDragEnd(colIdx)(event)"
+            >
+              <template #item="{ element: task }">
+                <div
+                  class="kanban-card"
+                  :title="
+                    (() => {
+                      const temp = taskStore.tasks.find((item) => item.ID == task.id);
+                      return `𝗜𝗗 ${temp.ID}\n𝗣𝗿𝗼𝗷𝗲𝗰𝘁 : ${temp.project_name}\n𝗣𝗵𝗮𝘀𝗲 : ${temp.phase}\n𝗧𝗮𝘀𝗸 : ${
+                        temp.task
+                      }\n𝗦𝘂𝗯𝗧𝗮𝘀𝗸 : ${temp.sub_task}\n𝗔𝘀𝘀𝗶𝗴𝗻𝗲𝗱 𝘁𝗼 ${temp.assigned_to || '-'}`;
+                    })()
+                  "
+                  @click="onTaskClick(task.id)"
+                >
+                  <div class="kanban-card-title-row">
+                    <span class="kanban-card-title" :title="task.title">{{ task.title }}</span>
+                  </div>
+                  <div class="kanban-card-meta">
+                    <span class="kanban-card-id">{{ task.code }}</span>
+                  </div>
+                </div>
+              </template>
+              <template #footer>
+                <div v-if="!column.tasks.length" class="kanban-empty-placeholder">Drop tasks here</div>
+              </template>
+            </draggable>
+          </div>
+        </div>
+      </div>
+    </q-card>
+  </LoadingSpinner>
+</template>
 
 <style lang="scss" scoped>
 .daily-tasks-body {
   margin: 2rem;
-  padding: 1rem;
+  padding: 2rem;
   background: #ffffff;
-  min-height: 80vh;
+  min-height: calc(100vh - 4rem - 100px);
   border-radius: 15px;
 }
-.kanban-header-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1.5rem 2rem 0 2rem;
-}
-.kanban-add-board-bar {
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-start;
-  padding: 0 0 2rem 2rem;
-}
 .kanban-board {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
   display: flex;
   gap: 2rem;
-  padding: 2rem 1rem 1rem 1rem;
-  background: #fff; /* white background */
-  min-height: 80vh;
-  overflow-x: auto;
-  overflow-y: visible;
+  padding: 2rem;
+  background: #fff;
   white-space: nowrap;
 }
 .kanban-column {
   background: #fff;
   border-radius: 1.2rem;
-  box-shadow: 0 4px 24px 0 rgba(25, 118, 210, 0.08); /* blue shadow */
+  box-shadow: 0 4px 24px 0 rgba(25, 118, 210, 0.2);
   padding: 1.5rem 1rem 2rem 1rem;
   min-width: 300px;
   display: flex;
   flex-direction: column;
-  min-height: 500px;
-  max-height: 700px;
+  min-height: calc(100vh - 4rem - 280px);
   position: relative;
   flex-shrink: 0;
 }
@@ -346,6 +268,7 @@ onBeforeUnmount(() => {
   padding: 0.3rem 0.7rem;
   border-radius: 0.5rem;
   border: 1px solid #bbdefb; /* light blue */
+  margin-left: 16px;
 }
 
 .kanban-add-task-btn-small {
@@ -423,6 +346,7 @@ onBeforeUnmount(() => {
   gap: 1rem;
   max-height: 600px;
   overflow-y: auto;
+  cursor: pointer;
 }
 .kanban-card {
   background: #f5faff;
@@ -450,7 +374,12 @@ onBeforeUnmount(() => {
   font-size: 1.08rem;
   font-weight: 600;
   color: #1976d2;
-  cursor: pointer;
+  display: inline-block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 .kanban-card-meta {
   display: flex;
@@ -491,54 +420,6 @@ onBeforeUnmount(() => {
   background: #fff;
   color: #1976d2;
 }
-.kanban-add-task-buttons {
-  display: flex;
-  gap: 0.5rem;
-  width: 100%;
-}
-.kanban-add-task-confirm-btn {
-  background: #1976d2;
-  color: #fff;
-  border: none;
-  border-radius: 0.5rem;
-  padding: 0.3rem 0.9rem;
-  font-size: 0.9rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
-  flex: 1;
-  &:hover {
-    background: #1565c0;
-  }
-  &:disabled {
-    background: #ccc;
-    cursor: not-allowed;
-  }
-}
-.kanban-add-task-cancel-btn {
-  background: #f5faff;
-  color: #1976d2;
-  border: none;
-  border-radius: 0.5rem;
-  padding: 0.3rem 0.9rem;
-  font-size: 0.9rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
-  flex: 1;
-  &:hover {
-    background: #e3f2fd;
-  }
-}
-.kanban-title-input {
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: #1976d2;
-  border: 1px solid #fde3f3;
-  border-radius: 0.4rem;
-  padding: 0.1rem 0.5rem;
-  max-width: 180px;
-}
 .kanban-empty-placeholder {
   min-height: 60px;
   display: flex;
@@ -550,5 +431,35 @@ onBeforeUnmount(() => {
   border-radius: 0.7rem;
   background: #f8fbff;
   margin: 0.5rem 0;
+}
+.mini-spinner {
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+.daily-project-selects {
+  display: flex;
+  align-items: center;
+
+  select {
+    width: 320px;
+  }
+}
+.selectbox {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #f1f5f9;
+  font-size: 15px;
+  margin: 0 10px;
+  transition: border 0.2s;
+  outline: none;
+  &:focus {
+    border: 1.5px solid #6366f1;
+  }
+
+  &.no-project-selected {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.2);
+  }
 }
 </style>
